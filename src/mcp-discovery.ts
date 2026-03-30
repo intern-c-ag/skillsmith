@@ -279,6 +279,9 @@ async function aiDiscover(stack: StackInfo): Promise<McpServer[]> {
 }
 
 export async function discoverMcps(stack: StackInfo): Promise<McpServer[]> {
+  // 0. Check what's already installed
+  const installed = new Set(await listInstalledMcps());
+
   // 1. Match built-ins to stack
   const matched = matchBuiltIns(stack);
 
@@ -301,7 +304,8 @@ export async function discoverMcps(stack: StackInfo): Promise<McpServer[]> {
     }
   }
 
-  return Array.from(byName.values());
+  // 4. Filter out already-installed MCPs
+  return Array.from(byName.values()).filter(s => !installed.has(s.name));
 }
 
 export async function installMcp(server: McpServer): Promise<boolean> {
@@ -324,10 +328,16 @@ export async function listInstalledMcps(): Promise<string[]> {
       timeout: 10_000,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    // Parse output lines — each line typically starts with the MCP name
+    // Parse output: lines like "server-name: url - status" or just "server-name"
     return output
       .split("\n")
       .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("Checking"))
+      .map((line) => {
+        // Extract name before colon or first space
+        const match = line.match(/^([^:\s]+)/);
+        return match ? match[1] : line;
+      })
       .filter(Boolean);
   } catch {
     return [];
