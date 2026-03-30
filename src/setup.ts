@@ -140,7 +140,8 @@ async function detectStack(dir: string): Promise<StackInfo> {
     [async () => '@angular/core' in allDeps, () => info.frameworks.push('angular')],
     [async () => 'tailwindcss' in allDeps, () => info.frameworks.push('tailwind')],
     [async () => 'electron' in allDeps, () => info.frameworks.push('electron')],
-    [async () => 'react-native' in allDeps, () => info.frameworks.push('react-native')],
+    [async () => 'react-native' in allDeps || 'react-native' in (pkg?.dependencies ?? {}), () => { if (!info.frameworks.includes('react-native')) info.frameworks.push('react-native'); }],
+    [async () => 'expo' in allDeps || await exists(join(dir, 'app.json')) && await fileContains(join(dir, 'app.json'), 'expo'), () => { if (!info.frameworks.includes('expo')) info.frameworks.push('expo'); if (!info.frameworks.includes('react-native')) info.frameworks.push('react-native'); }],
 
     // Build tools
     [async () => 'vite' in allDeps, () => info.buildTools.push('vite')],
