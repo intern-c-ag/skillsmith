@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import { scanRepo } from "./scanner.js";
+import { deepScan, type ProjectContext } from "./deep-scanner.js";
 import { generateSkills, type GeneratedSkill } from "./generator.js";
 import { researchStack } from "./research.js";
 import { discoverMcps, installMcp, type McpServer } from "./mcp-discovery.js";
@@ -92,7 +93,7 @@ export async function init(projectDir: string, opts: RunOptions = {}): Promise<v
 }
 
 /**
- * Train: learn from repos
+ * Train: deep-learn from repos
  */
 export async function train(paths: string[]): Promise<void> {
   banner();
@@ -104,39 +105,55 @@ export async function train(paths: string[]): Promise<void> {
     const repoPath = resolve(p);
     const repoName = basename(repoPath);
 
-    // Scan
-    const scanSpin = spinner(`Scanning ${repoName}...`);
-    const profile = await scanRepo(repoPath);
-    scanSpin.succeed(
-      `Scanned ${repoName} — ${profile.stack.languages.join(", ")} / ${profile.stack.frameworks.join(", ") || "no framework"}`
-    );
+    // 1. Deep scan — reads every file, shows progress
+    console.log(colors.bold(`\n📂 Scanning ${repoName}...\n`));
+    const context = await deepScan(repoPath, (file, stats) => {
+      const pct = stats.total > 0 ? Math.round((stats.scanned + stats.skipped) / stats.total * 100) : 0;
+      const line = `  ${colors.dim(`[${pct}%]`)} ${colors.cyan("reading")} ${file}`;
+      // Overwrite current line
+      process.stdout.write(`\r\x1b[K${line.slice(0, process.stdout.columns || 120)}`);
+    });
+    // Clear the progress line
+    process.stdout.write(`\r\x1b[K`);
 
-    // Research
+    console.log(colors.green(`  ✔ ${context.totalScanned} files read, ${context.totalSkipped} skipped`));
+    console.log(colors.dim(`    Languages: ${context.stack.languages.join(", ")}`));
+    console.log(colors.dim(`    Frameworks: ${context.stack.frameworks.join(", ") || "none"}`));
+    console.log(colors.dim(`    Docs: ${context.docs.length} files | References: ${context.references.length} files | Source: ${context.sourceFiles.length} files`));
+
+    if (context.identity) {
+      const preview = context.identity.split("\n").slice(0, 3).join(" ").slice(0, 200);
+      console.log(colors.dim(`    Identity: ${preview}...`));
+    }
+
+    // 2. Research current best practices
     const resSpin = spinner(
-      `Researching best practices for ${profile.stack.frameworks.join(", ") || profile.stack.languages.join(", ")}...`
+      `Researching best practices for ${context.stack.frameworks.join(", ") || context.stack.languages.join(", ")}...`
     );
     let research;
     try {
-      research = await researchStack(profile.stack, repoName);
+      research = await researchStack(context.stack, repoName);
       resSpin.succeed(`Found ${research.length} research topic(s)`);
     } catch {
       resSpin.fail("Research failed (continuing without web context)");
       research = undefined;
     }
 
-    // MCP discovery
+    // 3. MCP discovery
     const mcpSpin = spinner("Discovering MCP servers...");
     try {
-      const mcps = await discoverMcps(profile.stack);
+      const mcps = await discoverMcps(context.stack);
       allMcps.push(...mcps);
       mcpSpin.succeed(`Found ${mcps.length} relevant MCP server(s)`);
     } catch {
       mcpSpin.fail("MCP discovery failed (continuing)");
     }
 
-    // Generate
+    // 4. Generate skills from deep context
+    //    Build a comprehensive project summary for Claude
     const genSpin = spinner(`Generating skills for ${repoName}...`);
-    const generated = await generateSkills(profile, skillsDir, research);
+    const projectSummary = buildProjectSummary(context);
+    const generated = await generateSkillsFromContext(projectSummary, context.stack, skillsDir, repoName, research);
     genSpin.succeed(`Generated ${generated.length} skill(s)`);
 
     allGenerated.push(...generated);
@@ -164,6 +181,212 @@ export async function train(paths: string[]): Promise<void> {
   if (shouldPush) {
     await push();
   }
+}
+
+/**
+ * Build a comprehensive project summary from deep scan context.
+ * This gets fed to Claude for skill generation.
+ */
+function buildProjectSummary(ctx: ProjectContext): string {
+  const parts: string[] = [];
+
+  // Identity
+  parts.push(`# Project: ${ctx.name}\n\n${ctx.identity}`);
+
+  // Structure overview
+  parts.push(`\n## Structure\n${ctx.structure.slice(0, 100).join("\n")}`);
+
+  // Stack
+  parts.push(`\n## Stack\nLanguages: ${ctx.stack.languages.join(", ")}\nFrameworks: ${ctx.stack.frameworks.join(", ")}\nBuild: ${ctx.stack.buildTools.join(", ")}\nTesting: ${ctx.stack.testing.join(", ")}`);
+
+  // Key docs (full content of markdown files — these are gold)
+  if (ctx.docs.length > 0) {
+    parts.push(`\n## Documentation\n`);
+    for (const doc of ctx.docs.slice(0, 20)) {
+      // Include full content for docs up to 5000 chars each
+      const content = doc.content.slice(0, 5000);
+      parts.push(`### ${doc.path}\n${content}\n`);
+    }
+  }
+
+  // Reference materials (full content — these teach context)
+  if (ctx.references.length > 0) {
+    parts.push(`\n## Reference Materials\n`);
+    for (const ref of ctx.references.slice(0, 30)) {
+      const content = ref.content.slice(0, 3000);
+      parts.push(`### ${ref.path} (${ref.language})\n${content}\n`);
+    }
+  }
+
+  // Manifests
+  for (const m of ctx.manifests) {
+    parts.push(`\n## ${m.path}\n\`\`\`${m.language}\n${m.content.slice(0, 3000)}\n\`\`\``);
+  }
+
+  // Source code samples (diverse selection)
+  const sampleBudget = 50;
+  const categories = new Map<string, typeof ctx.sourceFiles>();
+  for (const f of ctx.sourceFiles) {
+    const dir = f.path.split("/").slice(0, 2).join("/");
+    if (!categories.has(dir)) categories.set(dir, []);
+    categories.get(dir)!.push(f);
+  }
+
+  parts.push(`\n## Source Code Samples\n`);
+  let samplesIncluded = 0;
+  for (const [dir, files] of categories) {
+    if (samplesIncluded >= sampleBudget) break;
+    // Pick up to 3 files per directory
+    for (const f of files.slice(0, 3)) {
+      if (samplesIncluded >= sampleBudget) break;
+      const content = f.content.slice(0, 2000);
+      parts.push(`### ${f.path} (${f.language}, ${f.lines} lines)\n\`\`\`${f.language}\n${content}\n\`\`\`\n`);
+      samplesIncluded++;
+    }
+  }
+
+  return parts.join("\n");
+}
+
+/**
+ * Generate skills using deep project context + Claude CLI
+ */
+async function generateSkillsFromContext(
+  projectSummary: string,
+  stack: ProjectContext["stack"],
+  outputDir: string,
+  repoName: string,
+  research?: any[],
+): Promise<GeneratedSkill[]> {
+  const { execSync } = await import("node:child_process");
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { join: joinPath } = await import("node:path");
+
+  // First ask Claude to analyze the project and decide what skills to generate
+  const planPrompt = `You are analyzing a software project to decide what skills to generate.
+
+${projectSummary.slice(0, 50000)}
+
+${research?.length ? `\nWeb research on current best practices:\n${research.map(r => `${r.topic}: ${r.findings}`).join("\n\n")}` : ""}
+
+Based on this project, decide what skill files to generate. Each skill should be specific to THIS project's domain and patterns, not generic.
+
+For a project like this, generate skills for:
+1. The project's core domain (what it does, key concepts)
+2. Architecture patterns used in this specific codebase
+3. Coding conventions and idioms specific to this project
+4. Testing patterns relevant to this stack
+5. Security considerations specific to the domain
+6. Any framework-specific patterns detected
+
+Return ONLY a JSON array of objects with: name (kebab-case), category, description (one line).
+Example: [{"name": "zcash-privacy-patterns", "category": "domain", "description": "Zcash shielded transaction patterns and privacy primitives"}]
+No markdown fences, just JSON.`;
+
+  let skillSpecs: Array<{ name: string; category: string; description: string }>;
+  try {
+    const planOutput = execSync(
+      `claude -p ${JSON.stringify(planPrompt)} --output-format text`,
+      { encoding: "utf-8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 }
+    );
+    const match = planOutput.match(/\[[\s\S]*\]/);
+    skillSpecs = match ? JSON.parse(match[0]) : [];
+  } catch {
+    // Fallback: generate generic skills based on stack
+    skillSpecs = [
+      { name: "architecture", category: "architecture", description: `${repoName} architecture and patterns` },
+      { name: "coding-conventions", category: "conventions", description: "Coding conventions and idioms" },
+      { name: "domain-patterns", category: "domain", description: "Domain-specific patterns and concepts" },
+    ];
+  }
+
+  // Generate each skill with full project context
+  const results: GeneratedSkill[] = [];
+
+  // Use a semaphore for parallel generation (max 3)
+  const queue = [...skillSpecs];
+  const running: Promise<void>[] = [];
+  const MAX_CONCURRENT = 3;
+
+  async function generateOne(spec: typeof skillSpecs[0]): Promise<void> {
+    const prompt = `You are generating a SKILL.md file for a Claude Code skill called "${spec.name}" for the project "${repoName}".
+
+Skill focus: ${spec.description}
+
+PROJECT CONTEXT:
+${projectSummary.slice(0, 40000)}
+
+${research?.length ? `\nCurrent best practices from web research:\n${research.map(r => `${r.topic}: ${r.findings}`).join("\n\n").slice(0, 5000)}` : ""}
+
+Generate a SKILL.md that is SPECIFIC to this project. Include:
+
+## Description
+When to use this skill (one paragraph, specific to ${repoName})
+
+## Patterns
+Concrete patterns from THIS codebase with code examples. Reference actual file paths and patterns you see.
+
+## Conventions  
+Naming, structure, and style conventions specific to this project.
+
+## Anti-Patterns
+What to avoid, based on both this codebase and current best practices.
+
+## Key Concepts
+Domain-specific concepts a developer needs to understand to work on this project.
+
+## References
+Links to relevant documentation, specs, or standards.
+
+Be SPECIFIC. Reference actual code, actual file paths, actual patterns from the project. This is not a generic skill — it's a guide for THIS codebase.
+Output ONLY the markdown. Max 200 lines.`;
+
+    try {
+      const output = execSync(
+        `claude -p ${JSON.stringify(prompt)} --output-format text`,
+        { encoding: "utf-8", timeout: 120000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 }
+      );
+
+      const skillDir = joinPath(outputDir, spec.name);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(joinPath(skillDir, "SKILL.md"), output, "utf-8");
+
+      // Save metadata
+      await writeFile(joinPath(skillDir, "meta.json"), JSON.stringify({
+        name: spec.name,
+        description: spec.description,
+        category: spec.category,
+        sourceRepo: repoName,
+        createdAt: new Date().toISOString(),
+      }, null, 2), "utf-8");
+
+      results.push({
+        name: spec.name,
+        path: joinPath(skillDir, "SKILL.md"),
+        description: spec.description,
+        category: spec.category,
+      });
+    } catch (err: any) {
+      console.error(colors.dim(`  ⚠ Failed to generate ${spec.name}: ${err.message?.slice(0, 100)}`));
+    }
+  }
+
+  // Run with concurrency limit
+  for (const spec of queue) {
+    const p = generateOne(spec);
+    running.push(p);
+    if (running.length >= MAX_CONCURRENT) {
+      await Promise.race(running);
+      // Remove resolved promises
+      for (let i = running.length - 1; i >= 0; i--) {
+        const settled = await Promise.race([running[i].then(() => true), Promise.resolve(false)]);
+        if (settled) running.splice(i, 1);
+      }
+    }
+  }
+  await Promise.all(running);
+
+  return results;
 }
 
 /**
