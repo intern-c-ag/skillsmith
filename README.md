@@ -1,52 +1,75 @@
 # skillsmith
 
-> Learn how you code. Generate reusable Claude Code skills from your repos.
+Learn how you code. Generate Claude Code skills from your repos.
 
-## Quick Start
+## Install
 
 ```bash
-# Train on your repos
-skillsmith train ~/projects/my-app ~/projects/api-server
-
-# Set up skills in a new project
-skillsmith init .
-
-# Push your skill library to GitHub
-skillsmith push
+curl -fsSL https://raw.githubusercontent.com/intern-c-ag/skillsmith/master/install.sh | bash
 ```
 
-## What It Does
+## How it works
 
-**`skillsmith train <path...>`** — Scans your repos, detects patterns (stack, conventions, architecture), and uses Claude Code to generate reusable `.claude` skills. Sensitive files are automatically skipped.
+You point it at a repo. It scans your code, searches the web for current best practices, finds relevant MCP servers, and generates `.claude` skills that teach Claude how *you* build things — plus where you could do better.
 
-**`skillsmith init [dir]`** — Sets up `.claude/skills/` in a project using your trained skill library.
+```
+skillsmith train ~/my-project
+```
 
-**`skillsmith push [repo]`** — Pushes your skill library to a GitHub repo for sharing and reuse.
+```
+  ✔ Scanned my-project — Rust, TypeScript / Anchor, React
+  ✔ Found 4 research topic(s)
+  ✔ Found 3 relevant MCP server(s)
+  ✔ Generated 6 skill(s)
 
-**`skillsmith list`** — Shows all your trained skills.
+  Name                 Description                          Category
+  architecture         Project structure and module layout   architecture
+  coding-conventions   Naming and style patterns            conventions
+  anchor-patterns      Anchor program patterns              patterns
+  react-patterns       React component patterns             patterns
+  testing-patterns     Test strategy with Vitest            testing
+  common-patterns      Shared utilities and error handling  patterns
 
-**`skillsmith config [key] [value]`** — Get/set configuration.
+  📡 Recommended MCP servers:
 
-## How Training Works
+  [1] solana-mcp-server — Solana + Anchor documentation and examples
+      claude mcp add --transport http solana-mcp-server https://mcp.solana.com/mcp
+  [2] playwright — Browser automation for testing
+      claude mcp add playwright -- npx -y @playwright/mcp@latest
 
-1. Scans project structure and dependencies
-2. Detects stack (languages, frameworks, tools)
-3. Samples representative code (skips secrets, env files, credentials)
-4. Feeds analysis to Claude Code to generate SKILL.md files
-5. Stores skills in `~/.config/skillsmith/skills/`
+  Install MCP servers? (comma-separated numbers, "all", or "skip"):
+```
 
-### What Gets Skipped
+Then use those skills anywhere:
 
-- `.env*`, `*secret*`, `*credential*`, `*.key`, `*.pem`
-- `node_modules/`, `.git/`, `dist/`, `build/`
-- Files matching `.gitignore`
-- Any file containing secrets/tokens in content
+```bash
+skillsmith init .          # copy skills into current project's .claude/
+skillsmith push my-skills  # push your skill library to GitHub
+skillsmith list            # see what you've trained
+```
+
+## What happens during `train`
+
+1. **Scan** — reads your project structure and code samples. Skips secrets, build artifacts, deps, and anything sensitive (static rules + AI inference).
+2. **Research** — uses Claude to search the web for current best practices for your stack. Your code isn't treated as gospel — skills capture what's ideal, not just what exists.
+3. **MCP Discovery** — finds MCP servers relevant to your stack (Solana, Postgres, MongoDB, etc.) from a built-in registry + web search.
+4. **Generate** — creates SKILL.md files enriched with both your patterns and web research. Includes anti-patterns and references.
 
 ## Requirements
 
 - Node.js >= 18
-- [Claude Code](https://docs.anthropic.com/claude-code) installed and authenticated
-- `gh` CLI (for push command)
+- [Claude Code](https://docs.anthropic.com/claude-code) installed and logged in
+- `gh` CLI (only for `push` command)
+
+## Update
+
+Run the install command again. It pulls the latest.
+
+## Uninstall
+
+```bash
+rm -rf ~/.skillsmith ~/.local/bin/skillsmith ~/.config/skillsmith
+```
 
 ## License
 
