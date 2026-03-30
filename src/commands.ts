@@ -126,17 +126,19 @@ export async function train(paths: string[]): Promise<void> {
       console.log(colors.dim(`    Identity: ${preview}...`));
     }
 
-    // 2. Research current best practices
-    const resSpin = spinner(
-      `Researching best practices for ${context.stack.frameworks.join(", ") || context.stack.languages.join(", ")}...`
-    );
+    // 2. Research current best practices (only if frameworks detected — skip for pure languages)
     let research;
-    try {
-      research = await researchStack(context.stack, repoName);
-      resSpin.succeed(`Found ${research.length} research topic(s)`);
-    } catch {
-      resSpin.fail("Research failed (continuing without web context)");
-      research = undefined;
+    if (context.stack.frameworks.length > 0) {
+      const resSpin = spinner(
+        `Researching best practices for ${context.stack.frameworks.join(", ")}...`
+      );
+      try {
+        research = await researchStack(context.stack, repoName);
+        resSpin.succeed(`Found ${research.length} research topic(s)`);
+      } catch {
+        resSpin.fail("Research failed (continuing without web context)");
+        research = undefined;
+      }
     }
 
     // 3. MCP discovery
@@ -199,32 +201,39 @@ function buildProjectSummary(ctx: ProjectContext): string {
   // Stack
   parts.push(`\n## Stack\nLanguages: ${ctx.stack.languages.join(", ")}\nFrameworks: ${ctx.stack.frameworks.join(", ")}\nBuild: ${ctx.stack.buildTools.join(", ")}\nTesting: ${ctx.stack.testing.join(", ")}`);
 
-  // Key docs (full content of markdown files — these are gold)
+  // Key docs (prioritize README and top-level docs)
   if (ctx.docs.length > 0) {
     parts.push(`\n## Documentation\n`);
-    for (const doc of ctx.docs.slice(0, 20)) {
-      // Include full content for docs up to 5000 chars each
-      const content = doc.content.slice(0, 5000);
+    // Sort: READMEs first, then by path depth (shallower = more important)
+    const sortedDocs = [...ctx.docs].sort((a, b) => {
+      const aReadme = /readme/i.test(a.path) ? 0 : 1;
+      const bReadme = /readme/i.test(b.path) ? 0 : 1;
+      if (aReadme !== bReadme) return aReadme - bReadme;
+      return a.path.split("/").length - b.path.split("/").length;
+    });
+    for (const doc of sortedDocs.slice(0, 10)) {
+      const content = doc.content.slice(0, 2000);
       parts.push(`### ${doc.path}\n${content}\n`);
     }
   }
 
-  // Reference materials (full content — these teach context)
+  // Reference materials (summaries, not full content)
   if (ctx.references.length > 0) {
     parts.push(`\n## Reference Materials\n`);
-    for (const ref of ctx.references.slice(0, 30)) {
-      const content = ref.content.slice(0, 3000);
+    for (const ref of ctx.references.slice(0, 10)) {
+      const content = ref.content.slice(0, 1500);
       parts.push(`### ${ref.path} (${ref.language})\n${content}\n`);
     }
   }
 
-  // Manifests
-  for (const m of ctx.manifests) {
-    parts.push(`\n## ${m.path}\n\`\`\`${m.language}\n${m.content.slice(0, 3000)}\n\`\`\``);
+  // Manifests (only top-level ones)
+  const topManifests = ctx.manifests.filter(m => m.path.split("/").length <= 2);
+  for (const m of topManifests.slice(0, 5)) {
+    parts.push(`\n## ${m.path}\n\`\`\`${m.language}\n${m.content.slice(0, 2000)}\n\`\`\``);
   }
 
   // Source code samples (diverse selection)
-  const sampleBudget = 50;
+  const sampleBudget = 25;
   const categories = new Map<string, typeof ctx.sourceFiles>();
   for (const f of ctx.sourceFiles) {
     const dir = f.path.split("/").slice(0, 2).join("/");
@@ -237,9 +246,9 @@ function buildProjectSummary(ctx: ProjectContext): string {
   for (const [dir, files] of categories) {
     if (samplesIncluded >= sampleBudget) break;
     // Pick up to 3 files per directory
-    for (const f of files.slice(0, 3)) {
+    for (const f of files.slice(0, 2)) {
       if (samplesIncluded >= sampleBudget) break;
-      const content = f.content.slice(0, 2000);
+      const content = f.content.slice(0, 1000);
       parts.push(`### ${f.path} (${f.language}, ${f.lines} lines)\n\`\`\`${f.language}\n${content}\n\`\`\`\n`);
       samplesIncluded++;
     }
@@ -262,129 +271,70 @@ async function generateSkillsFromContext(
   const { mkdir, writeFile } = await import("node:fs/promises");
   const { join: joinPath } = await import("node:path");
 
-  // First ask Claude to analyze the project and decide what skills to generate
-  const planPrompt = `You are analyzing a software project to decide what skills to generate.
-
-${projectSummary.slice(0, 50000)}
-
-${research?.length ? `\nWeb research on current best practices:\n${research.map(r => `${r.topic}: ${r.findings}`).join("\n\n")}` : ""}
-
-Based on this project, decide what skill files to generate. Each skill should be specific to THIS project's domain and patterns, not generic.
-
-For a project like this, generate skills for:
-1. The project's core domain (what it does, key concepts)
-2. Architecture patterns used in this specific codebase
-3. Coding conventions and idioms specific to this project
-4. Testing patterns relevant to this stack
-5. Security considerations specific to the domain
-6. Any framework-specific patterns detected
-
-Return ONLY a JSON array of objects with: name (kebab-case), category, description (one line).
-Example: [{"name": "zcash-privacy-patterns", "category": "domain", "description": "Zcash shielded transaction patterns and privacy primitives"}]
-No markdown fences, just JSON.`;
-
-  let skillSpecs: Array<{ name: string; category: string; description: string }>;
-  try {
-    const planOutput = execSync(
-      `claude -p ${JSON.stringify(planPrompt)} --output-format text`,
-      { encoding: "utf-8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 }
-    );
-    const match = planOutput.match(/\[[\s\S]*\]/);
-    skillSpecs = match ? JSON.parse(match[0]) : [];
-  } catch {
-    // Fallback: generate generic skills based on stack
-    skillSpecs = [
-      { name: "architecture", category: "architecture", description: `${repoName} architecture and patterns` },
-      { name: "coding-conventions", category: "conventions", description: "Coding conventions and idioms" },
-      { name: "domain-patterns", category: "domain", description: "Domain-specific patterns and concepts" },
-    ];
-  }
-
-  // Generate each skill with full project context
-  const results: GeneratedSkill[] = [];
-
-  // Use a semaphore for parallel generation (max 3)
-  const queue = [...skillSpecs];
-  const running: Promise<void>[] = [];
-  const MAX_CONCURRENT = 3;
-
-  async function generateOne(spec: typeof skillSpecs[0]): Promise<void> {
-    const prompt = `You are generating a SKILL.md file for a Claude Code skill called "${spec.name}" for the project "${repoName}".
-
-Skill focus: ${spec.description}
+  // Single Claude call: analyze project AND generate all skills at once
+  // Keep context under 30K to avoid Claude CLI timeouts
+  const prompt = `You are analyzing a software project and generating Claude Code skill files.
 
 PROJECT CONTEXT:
-${projectSummary.slice(0, 40000)}
+${projectSummary.slice(0, 30000)}
 
-${research?.length ? `\nCurrent best practices from web research:\n${research.map(r => `${r.topic}: ${r.findings}`).join("\n\n").slice(0, 5000)}` : ""}
+${research?.length ? `\nWeb research on current best practices:\n${research.map(r => `${r.topic}: ${r.findings}`).join("\n\n").slice(0, 10000)}` : ""}
 
-Generate a SKILL.md that is SPECIFIC to this project. Include:
+TASK: Generate 4-8 SKILL.md files specific to THIS project "${repoName}". Each skill should cover a different aspect:
+1. Core domain (what this project does, key concepts, domain-specific patterns)
+2. Architecture (how the codebase is organized, module boundaries, data flow)
+3. Coding conventions (naming, style, idioms specific to this project)
+4. Security considerations for this domain
+5. Testing patterns (if applicable)
+6. Framework-specific patterns (if applicable)
 
-## Description
-When to use this skill (one paragraph, specific to ${repoName})
+OUTPUT FORMAT: Return a JSON array where each object has:
+- "name": kebab-case skill name (e.g. "zcash-privacy-patterns")
+- "category": one of "domain", "architecture", "conventions", "security", "testing", "patterns"
+- "description": one-line description
+- "content": the FULL SKILL.md markdown content (100-200 lines)
 
-## Patterns
-Concrete patterns from THIS codebase with code examples. Reference actual file paths and patterns you see.
+Each skill's content must have sections: ## Description, ## Patterns (with code examples referencing actual files), ## Conventions, ## Anti-Patterns, ## Key Concepts, ## References
 
-## Conventions  
-Naming, structure, and style conventions specific to this project.
+Be SPECIFIC to this project. Reference actual file paths, actual patterns, actual code. Not generic.
+Return ONLY the JSON array. No markdown fences.`;
 
-## Anti-Patterns
-What to avoid, based on both this codebase and current best practices.
-
-## Key Concepts
-Domain-specific concepts a developer needs to understand to work on this project.
-
-## References
-Links to relevant documentation, specs, or standards.
-
-Be SPECIFIC. Reference actual code, actual file paths, actual patterns from the project. This is not a generic skill — it's a guide for THIS codebase.
-Output ONLY the markdown. Max 200 lines.`;
-
-    try {
-      const output = execSync(
-        `claude -p ${JSON.stringify(prompt)} --output-format text`,
-        { encoding: "utf-8", timeout: 120000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 10 * 1024 * 1024 }
-      );
-
-      const skillDir = joinPath(outputDir, spec.name);
-      await mkdir(skillDir, { recursive: true });
-      await writeFile(joinPath(skillDir, "SKILL.md"), output, "utf-8");
-
-      // Save metadata
-      await writeFile(joinPath(skillDir, "meta.json"), JSON.stringify({
-        name: spec.name,
-        description: spec.description,
-        category: spec.category,
-        sourceRepo: repoName,
-        createdAt: new Date().toISOString(),
-      }, null, 2), "utf-8");
-
-      results.push({
-        name: spec.name,
-        path: joinPath(skillDir, "SKILL.md"),
-        description: spec.description,
-        category: spec.category,
-      });
-    } catch (err: any) {
-      console.error(colors.dim(`  ⚠ Failed to generate ${spec.name}: ${err.message?.slice(0, 100)}`));
-    }
+  let skills: Array<{ name: string; category: string; description: string; content: string }>;
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const output = execFileSync(
+      "claude",
+      ["-p", prompt, "--output-format", "text"],
+      { encoding: "utf-8", timeout: 300000, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 50 * 1024 * 1024 }
+    );
+    const match = output.match(/\[[\s\S]*\]/);
+    skills = match ? JSON.parse(match[0]) : [];
+  } catch (err: any) {
+    console.error(colors.dim(`  ⚠ Skill generation failed: ${err.message?.slice(0, 200)}`));
+    return [];
   }
 
-  // Run with concurrency limit
-  for (const spec of queue) {
-    const p = generateOne(spec);
-    running.push(p);
-    if (running.length >= MAX_CONCURRENT) {
-      await Promise.race(running);
-      // Remove resolved promises
-      for (let i = running.length - 1; i >= 0; i--) {
-        const settled = await Promise.race([running[i].then(() => true), Promise.resolve(false)]);
-        if (settled) running.splice(i, 1);
-      }
-    }
+  // Write skill files
+  const results: GeneratedSkill[] = [];
+  for (const skill of skills) {
+    if (!skill.name || !skill.content) continue;
+    const skillDir = joinPath(outputDir, skill.name);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(joinPath(skillDir, "SKILL.md"), skill.content, "utf-8");
+    await writeFile(joinPath(skillDir, "meta.json"), JSON.stringify({
+      name: skill.name,
+      description: skill.description,
+      category: skill.category,
+      sourceRepo: repoName,
+      createdAt: new Date().toISOString(),
+    }, null, 2), "utf-8");
+    results.push({
+      name: skill.name,
+      path: joinPath(skillDir, "SKILL.md"),
+      description: skill.description || "",
+      category: skill.category || "",
+    });
   }
-  await Promise.all(running);
 
   return results;
 }

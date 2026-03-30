@@ -56,7 +56,7 @@ WRAPPER
   echo ""
   success "vibe installed!"
   echo ""
-  echo "  Run ${bold}vibe${reset} in any project to get started."
+  echo -e "  Run \033[1mvibe\033[0m in any project to get started."
   echo ""
 }
 
