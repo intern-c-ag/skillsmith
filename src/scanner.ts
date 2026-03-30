@@ -34,16 +34,88 @@ export interface RepoProfile {
 }
 
 const SENSITIVE_PATTERNS = [
-  /^\.env/i, /secrets/i, /credentials/i, /\.key$/, /\.pem$/, /\.p12$/,
-  /\.keystore$/, /\.jks$/, /id_rsa/, /id_ed25519/,
+  // Secrets & credentials
+  /^\.env/i, /\.env\./i, /secrets/i, /credentials/i, /\.key$/, /\.pem$/, /\.p12$/,
+  /\.keystore$/, /\.jks$/, /id_rsa/, /id_ed25519/, /id_dsa/, /\.pfx$/,
+  /\.crt$/, /\.cer$/, /\.der$/, /\.gpg$/, /\.asc$/,
+  /password/i, /token/i, /apikey/i, /api_key/i,
+  /\.htpasswd$/, /\.netrc$/, /\.npmrc$/, /\.pypirc$/,
+  /service[-_]?account/i, /gcloud.*json$/, /firebase.*json$/,
+  // Auth configs
+  /auth\.json$/, /credentials\.json$/, /oauth/i,
 ];
 
+// Build artifacts, dependencies, and generated directories — ALL languages
 const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'dist', 'build', '.next', '__pycache__',
-  '.venv', 'venv', 'vendor', 'target', '.terraform', 'coverage',
+  // Version control
+  '.git', '.svn', '.hg',
+  // JavaScript/TypeScript
+  'node_modules', 'dist', 'build', '.next', '.nuxt', '.output', '.svelte-kit',
+  '.turbo', '.vercel', '.netlify', '.cache', '.parcel-cache', 'out',
+  'storybook-static', '.docusaurus',
+  // Python
+  '__pycache__', '.venv', 'venv', 'env', '.eggs', 'egg-info',
+  '.mypy_cache', '.pytest_cache', '.ruff_cache', '.tox', 'site-packages',
+  '.pytype', 'htmlcov', '.nox', '.pants.d',
+  // Go
+  'vendor',
+  // Rust
+  'target',
+  // Java/Kotlin/Scala
+  '.gradle', '.m2', '.mvn', '.idea', 'out', 'classes',
+  // .NET / C#
+  'bin', 'obj', 'packages', '.nuget',
+  // Ruby
+  '.bundle', 'vendor/bundle',
+  // PHP
+  'vendor',
+  // Dart/Flutter
+  '.dart_tool', '.flutter-plugins', '.pub-cache',
+  // Elixir
+  '_build', 'deps',
+  // iOS/macOS
+  'Pods', 'DerivedData',
+  // Android
+  '.gradle', 'build',
+  // Terraform / IaC
+  '.terraform', '.terragrunt-cache',
+  // General
+  'coverage', '.coverage', '.nyc_output', '.scannerwork',
+  'tmp', 'temp', 'logs', '.log',
+  // IDE / Editor
+  '.idea', '.vscode', '.vs', '.eclipse', '.settings',
 ]);
 
-const SENSITIVE_CONTENT_RE = /(?:secret|password|token|api_key|apikey|private_key)\s*[:=]/i;
+const SENSITIVE_CONTENT_RE = /(?:secret|password|passwd|token|api_key|apikey|private_key|access_key|secret_key|auth_token|bearer|jwt_secret|encryption_key|signing_key|client_secret|database_url|connection_string|dsn)\s*[:=]/i;
+
+// Files that are never useful for learning code patterns
+const SKIP_FILE_PATTERNS = [
+  // Lock files
+  /package-lock\.json$/, /yarn\.lock$/, /pnpm-lock\.yaml$/, /bun\.lockb$/,
+  /Gemfile\.lock$/, /poetry\.lock$/, /Pipfile\.lock$/, /composer\.lock$/,
+  /Cargo\.lock$/, /go\.sum$/, /packages\.lock\.json$/, /pubspec\.lock$/,
+  // Minified / bundled / generated
+  /\.min\.(js|css)$/, /\.bundle\.(js|css)$/, /\.chunk\.(js|css)$/,
+  /\.generated\./i, /\.g\.(dart|cs)$/, /\.freezed\.dart$/,
+  // Binary & media
+  /\.(png|jpg|jpeg|gif|ico|svg|webp|bmp|tiff)$/i,
+  /\.(woff2?|ttf|eot|otf)$/i,
+  /\.(mp3|mp4|avi|mov|wav|ogg|webm)$/i,
+  /\.(pdf|doc|docx|xls|xlsx|ppt|pptx)$/i,
+  /\.(zip|tar|gz|bz2|rar|7z|dmg|iso|jar|war|ear)$/i,
+  /\.(exe|dll|so|dylib|o|a|pyc|pyo|class|wasm)$/i,
+  /\.(sqlite|db|mdb)$/i,
+  // Source maps
+  /\.map$/,
+  // Data dumps
+  /\.(csv|tsv)$/i,
+  /\.sql$/i, // SQL dumps can contain data
+];
+
+function isSkippableFile(filePath: string): boolean {
+  const base = path.basename(filePath);
+  return SKIP_FILE_PATTERNS.some(p => p.test(base) || p.test(filePath));
+}
 
 const LANG_MAP: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
@@ -59,13 +131,77 @@ const CODE_EXTENSIONS = new Set(Object.keys(LANG_MAP));
 
 function isSensitivePath(filePath: string): boolean {
   const base = path.basename(filePath);
-  return SENSITIVE_PATTERNS.some(p => p.test(base));
+  const full = filePath.toLowerCase();
+  // Check filename patterns
+  if (SENSITIVE_PATTERNS.some(p => p.test(base))) return true;
+  // Check path components
+  if (SKIP_FILE_PATTERNS.some(p => p.test(full))) return true;
+  if (isSkippableFile(filePath)) return true;
+  return false;
 }
 
 function hasSensitiveContent(content: string): boolean {
-  // Only check first 50 lines for performance
-  const head = content.split('\n', 50).join('\n');
+  // Check first 80 lines for secrets
+  const head = content.split('\n', 80).join('\n');
   return SENSITIVE_CONTENT_RE.test(head);
+}
+
+/**
+ * Uses Claude CLI to infer whether a list of file paths might be sensitive,
+ * generated, or not useful for learning code patterns.
+ * Returns the set of paths that should be KEPT (not filtered).
+ */
+async function aiFilterFiles(filePaths: string[], repoPath: string): Promise<Set<string>> {
+  if (filePaths.length === 0) return new Set();
+
+  // Only ask AI about ambiguous files (the ones that passed static filters)
+  // Group into batches to avoid overly long prompts
+  const BATCH = 200;
+  const keep = new Set<string>();
+
+  for (let i = 0; i < filePaths.length; i += BATCH) {
+    const batch = filePaths.slice(i, i + BATCH);
+    const fileList = batch.join('\n');
+
+    const prompt = `You are a code sensitivity filter. Given this list of file paths from a repository, identify which ones should be EXCLUDED from a training dataset. Exclude files that are:
+- Generated/auto-generated code (migrations with hashes, protobuf outputs, swagger codegen, etc.)
+- Configuration files that might contain secrets even if they don't have obvious patterns
+- Binary files that slipped through
+- Vendor/third-party code copied into the repo
+- Data files, fixtures with real data, database seeds with PII
+- CI/CD configs that might reference secrets via variable names
+- Certificate or key-adjacent files
+
+Reply with ONLY a JSON array of the file paths to EXCLUDE. If none should be excluded, reply [].
+No explanation, just the JSON array.
+
+File paths:
+${fileList}`;
+
+    try {
+      const result = execSync(
+        `claude -p ${JSON.stringify(prompt)} --output-format text`,
+        { cwd: repoPath, maxBuffer: 5 * 1024 * 1024, encoding: 'utf-8', timeout: 30000 }
+      );
+
+      // Parse the response — extract JSON array
+      const match = result.match(/\[[\s\S]*?\]/);
+      if (match) {
+        const excluded = new Set<string>(JSON.parse(match[0]) as string[]);
+        for (const f of batch) {
+          if (!excluded.has(f)) keep.add(f);
+        }
+      } else {
+        // If parsing fails, keep all
+        for (const f of batch) keep.add(f);
+      }
+    } catch {
+      // If AI filter fails, fall back to keeping all
+      for (const f of batch) keep.add(f);
+    }
+  }
+
+  return keep;
 }
 
 function getGitFiles(repoPath: string): string[] | null {
@@ -391,13 +527,17 @@ export async function scanRepo(repoPath: string): Promise<RepoProfile> {
     files = walkDir(absPath, absPath);
   }
 
-  // Filter out sensitive and skipped files
+  // Static filter: skip known build/deps dirs, sensitive paths, non-code files
   files = files.filter(f => {
     const parts = f.split('/');
-    if (parts.some(p => SKIP_DIRS.has(p) || p.startsWith('.env'))) return false;
+    if (parts.some(p => SKIP_DIRS.has(p) || p.startsWith('.env') || p.startsWith('.'))) return false;
     if (isSensitivePath(f)) return false;
     return true;
   });
+
+  // AI filter: use Claude to infer which remaining files are sensitive/generated/useless
+  const aiKept = await aiFilterFiles(files, absPath);
+  files = files.filter(f => aiKept.has(f));
 
   const structure = getDirTree(absPath);
   const stack = detectStack(absPath);
