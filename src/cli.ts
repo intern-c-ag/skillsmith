@@ -2,83 +2,106 @@
 
 import { resolve } from "path";
 import { banner, colors } from "./ui.js";
-import { train, init, push, list, config } from "./commands.js";
 
 const args = process.argv.slice(2);
-const command = args[0];
+const flags = new Set(args.filter(a => a.startsWith("-")));
+const positional = args.filter(a => !a.startsWith("-"));
+const command = positional[0];
 
 function printHelp(): void {
   banner();
   console.log(`
-${colors.bold("Usage:")} skillsmith <command> [options]
+${colors.bold("Usage:")} vibe [command] [options]
 
 ${colors.bold("Commands:")}
-  ${colors.cyan("train")} <path...>      Learn patterns from one or more repos
-  ${colors.cyan("init")}  [dir]          Set up .claude/ skills in a project
-  ${colors.cyan("push")}  [repo]         Push your skill library to GitHub
-  ${colors.cyan("list")}                 List all trained skills
-  ${colors.cyan("config")} [key] [val]   Get or set configuration
+  ${colors.cyan("(default)")}              Set up project + launch Claude Code
+  ${colors.cyan("train")} <path...>        Learn patterns from your repos
+  ${colors.cyan("init")}                   Set up project without launching
+  ${colors.cyan("mcp")}                    Discover and install MCP servers
+  ${colors.cyan("push")} [repo]            Push skill library to GitHub
+  ${colors.cyan("list")}                   List trained skills
+  ${colors.cyan("config")} [key] [val]     Get or set configuration
 
 ${colors.bold("Options:")}
-  --all                Install all skills (with init)
-  --force              Overwrite existing skills
+  --force              Overwrite all existing files
+  --new                Start fresh session (skip resume)
+  --no-claude          Skip Claude Code install and launch
+  --no-update-check    Skip update check
   -h, --help           Show this help
   -v, --version        Show version
 
 ${colors.bold("Examples:")}
-  ${colors.dim("# Train on your repos")}
-  skillsmith train ~/projects/my-app ~/projects/api-server
+  ${colors.dim("# Set up and start vibing")}
+  vibe
 
-  ${colors.dim("# Set up skills in current project")}
-  skillsmith init .
+  ${colors.dim("# Train on your repos first")}
+  vibe train ~/projects/my-solana-app ~/projects/api
 
-  ${colors.dim("# Push skills to GitHub")}
-  skillsmith push
+  ${colors.dim("# Then start a new project with your skills")}
+  cd ~/new-project && vibe
+
+  ${colors.dim("# Just discover MCPs for current project")}
+  vibe mcp
 `);
 }
 
 async function main(): Promise<void> {
-  if (!command || command === "-h" || command === "--help") {
+  if (flags.has("-h") || flags.has("--help")) {
     printHelp();
     process.exit(0);
   }
 
-  if (command === "-v" || command === "--version") {
-    console.log("skillsmith v0.1.0");
+  if (flags.has("-v") || flags.has("--version")) {
+    console.log("vibe v0.1.0");
     process.exit(0);
   }
 
+  // Dynamic imports to keep startup fast
+  const { run, train, init, mcp, push, list, config } = await import("./commands.js");
+
+  const opts = {
+    force: flags.has("--force"),
+    newSession: flags.has("--new"),
+    noClaude: flags.has("--no-claude"),
+  };
+
   try {
     switch (command) {
+      case undefined:
+      case "start": {
+        // Default: full setup + launch
+        await run(process.cwd(), opts);
+        break;
+      }
       case "train": {
-        const paths = args.slice(1).filter(a => !a.startsWith("-"));
+        const paths = positional.slice(1);
         if (paths.length === 0) {
           console.error(`${colors.red("Error:")} Provide at least one repo path`);
-          console.error(`  ${colors.dim("skillsmith train ~/my-project")}`);
+          console.error(`  ${colors.dim("vibe train ~/my-project")}`);
           process.exit(1);
         }
         await train(paths.map(p => resolve(p)));
         break;
       }
       case "init": {
-        const dir = args[1] && !args[1].startsWith("-") ? resolve(args[1]) : process.cwd();
-        const all = args.includes("--all");
-        await init(dir, { all });
+        await init(process.cwd(), opts);
+        break;
+      }
+      case "mcp": {
+        await mcp(process.cwd());
         break;
       }
       case "push": {
-        const remote = args[1] && !args[1].startsWith("-") ? args[1] : undefined;
+        const remote = positional[1];
         await push(remote);
         break;
       }
       case "list": {
-        await list();
+        list();
         break;
       }
       case "config": {
-        const key = args[1];
-        const value = args[2];
-        await config(key, value);
+        config(positional[1], positional[2]);
         break;
       }
       default:

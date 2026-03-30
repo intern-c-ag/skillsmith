@@ -1,76 +1,83 @@
-# skillsmith
+# vibe
 
-Learn how you code. Generate Claude Code skills from your repos.
+One command to set up Claude Code with skills, agents, and MCPs — learned from how you actually code.
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/intern-c-ag/skillsmith/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/intern-c-ag/vibe/master/install.sh | bash
 ```
 
-## How it works
-
-You point it at a repo. It scans your code, searches the web for current best practices, finds relevant MCP servers, and generates `.claude` skills that teach Claude how *you* build things — plus where you could do better.
-
-```
-skillsmith train ~/my-project
-```
-
-```
-  ✔ Scanned my-project — Rust, TypeScript / Anchor, React
-  ✔ Found 4 research topic(s)
-  ✔ Found 3 relevant MCP server(s)
-  ✔ Generated 6 skill(s)
-
-  Name                 Description                          Category
-  architecture         Project structure and module layout   architecture
-  coding-conventions   Naming and style patterns            conventions
-  anchor-patterns      Anchor program patterns              patterns
-  react-patterns       React component patterns             patterns
-  testing-patterns     Test strategy with Vitest            testing
-  common-patterns      Shared utilities and error handling  patterns
-
-  📡 Recommended MCP servers:
-
-  [1] solana-mcp-server — Solana + Anchor documentation and examples
-      claude mcp add --transport http solana-mcp-server https://mcp.solana.com/mcp
-  [2] playwright — Browser automation for testing
-      claude mcp add playwright -- npx -y @playwright/mcp@latest
-
-  Install MCP servers? (comma-separated numbers, "all", or "skip"):
-```
-
-Then use those skills anywhere:
+## Usage
 
 ```bash
-skillsmith init .          # copy skills into current project's .claude/
-skillsmith push my-skills  # push your skill library to GitHub
-skillsmith list            # see what you've trained
+cd ~/my-project
+vibe
 ```
 
-## What happens during `train`
+That's it. Vibe scans your project, generates a `.claude/` folder with agents, skills, commands, and config tailored to your stack, discovers and installs relevant MCP servers, installs Claude Code if needed, and launches it.
 
-1. **Scan** — reads your project structure and code samples. Skips secrets, build artifacts, deps, and anything sensitive (static rules + AI inference).
-2. **Research** — uses Claude to search the web for current best practices for your stack. Your code isn't treated as gospel — skills capture what's ideal, not just what exists.
-3. **MCP Discovery** — finds MCP servers relevant to your stack (Solana, Postgres, MongoDB, etc.) from a built-in registry + web search.
-4. **Generate** — creates SKILL.md files enriched with both your patterns and web research. Includes anti-patterns and references.
+### Train on your repos
+
+The real power: teach vibe how *you* code, then carry that everywhere.
+
+```bash
+# Learn from your existing projects
+vibe train ~/projects/solana-app ~/projects/api-server
+
+# Now every project gets your patterns
+cd ~/new-project && vibe
+```
+
+Training scans your code (skips secrets), searches the web for current best practices, and generates skills that blend your patterns with what's actually recommended in 2025-2026. Your code isn't treated as gospel.
+
+### All commands
+
+```
+vibe                     Set up project + launch Claude Code
+vibe train <path...>     Learn patterns from your repos
+vibe init                Set up project without launching
+vibe mcp                 Discover and install MCP servers
+vibe push [repo]         Push skill library to GitHub
+vibe list                List trained skills
+vibe config [key] [val]  Get or set configuration
+```
+
+### Flags
+
+```
+--force              Overwrite existing files
+--new                Fresh session (skip resume)
+--no-claude          Skip Claude Code install/launch
+```
+
+## What gets generated
+
+```
+.claude/
+├── agents/          Specialized sub-agents (research, commits, testing, review)
+├── skills/          Auto-generated + trained skills for your stack
+├── commands/        Slash commands (/commit, /review, /test, /fix)
+├── config/          Project configuration
+└── settings.json
+```
+
+Everything is generated dynamically based on your actual project — not from a static template.
 
 ## Requirements
 
 - Node.js >= 18
-- [Claude Code](https://docs.anthropic.com/claude-code) installed and logged in
-- `gh` CLI (only for `push` command)
+- [Claude Code](https://docs.anthropic.com/claude-code) (installed automatically if missing)
+- `gh` CLI (only for `push`)
 
 ## Update
 
-Run the install command again. It pulls the latest.
+```bash
+curl -fsSL https://raw.githubusercontent.com/intern-c-ag/vibe/master/install.sh | bash
+```
 
 ## Uninstall
 
 ```bash
-rm -rf ~/.skillsmith ~/.local/bin/skillsmith ~/.config/skillsmith
+rm -rf ~/.vibe ~/.local/bin/vibe ~/.config/vibe
 ```
-
-## License
-
-MIT
