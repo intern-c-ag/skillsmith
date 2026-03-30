@@ -119,6 +119,19 @@ async function detectStack(dir: string): Promise<StackInfo> {
     [async () => 'hono' in allDeps, () => info.frameworks.push('hono')],
     [async () => '@nestjs/core' in allDeps, () => info.frameworks.push('nestjs')],
     [() => exists(join(dir, 'Anchor.toml')), () => { info.frameworks.push('anchor'); info.frameworks.push('solana'); }],
+    [async () => {
+      // Detect native Solana programs (no Anchor) — check Cargo.toml for solana deps
+      if (info.frameworks.includes('solana')) return false;
+      const cargoPath = join(dir, 'Cargo.toml');
+      if (await exists(cargoPath)) {
+        return await fileContains(cargoPath, 'solana-program') ||
+               await fileContains(cargoPath, 'solana-sdk') ||
+               await fileContains(cargoPath, 'anchor-lang') ||
+               await fileContains(cargoPath, 'pinocchio');
+      }
+      // Check for package.json solana deps (JS/TS Solana projects)
+      return '@solana/web3.js' in allDeps || '@solana/spl-token' in allDeps || '@coral-xyz/anchor' in allDeps;
+    }, () => { if (!info.frameworks.includes('solana')) info.frameworks.push('solana'); }],
     [async () => await exists(join(dir, 'hardhat.config.js')) || await exists(join(dir, 'hardhat.config.ts')), () => info.frameworks.push('hardhat')],
     [async () => await exists(join(dir, 'foundry.toml')), () => info.frameworks.push('foundry')],
     [async () => 'django' in allDeps || await fileContains(join(dir, 'pyproject.toml'), 'django'), () => info.frameworks.push('django')],
@@ -381,40 +394,40 @@ export async function setupProject(projectDir: string, options: SetupOptions = {
 
   // 1. Stack already detected above
 
+  // Load pre-written templates (instant, no AI calls)
+  let tpl: { agents: Record<string, string>; skills: Record<string, string>; commands: Record<string, string> } = { agents: {}, skills: {}, commands: {} };
+  try {
+    const { getTemplates } = await import('./templates.js');
+    const t = getTemplates(stack);
+    tpl = t;
+  } catch {
+    // templates module not available, fall back to inline generation
+  }
+
   // 2. Generate agents
   const agentNames = ['research-web', 'commit-manager', 'tester', 'reviewer'];
   const agentsDir = join(claudeDir, 'agents');
   await mkdirp(agentsDir);
   for (const name of agentNames) {
-    const content = generateAgentContent(name, stack);
+    const content = tpl.agents[name] || generateAgentContent(name, stack);
     await writeFile(join(agentsDir, `${name}.md`), content, 'utf8');
     result.agents++;
   }
 
-  // 3. Generate skills (parallel with semaphore)
   const skillDefs = getSkillsForStack(stack);
-  const sem = semaphore(3);
-  const skillResults = await Promise.all(
-    skillDefs.map(({ dir, topic }) =>
-      sem(async () => {
-        const skillDir = join(claudeDir, 'skills', dir);
-        const skillPath = join(skillDir, 'SKILL.md');
-        if (!force && existingFiles.has(skillPath)) return false;
-        await mkdirp(skillDir);
+  let skillCount = 0;
+  for (const { dir, topic } of skillDefs) {
+    const skillDir = join(claudeDir, 'skills', dir);
+    const skillPath = join(skillDir, 'SKILL.md');
+    if (!force && existingFiles.has(skillPath)) continue;
+    await mkdirp(skillDir);
 
-        let content: string;
-        if (noClaude) {
-          content = generateSkillFallback(topic);
-        } else {
-          const prompt = `You are generating a SKILL.md file for a Claude Code skill called "${dir}". Search the web for current best practices (2025-2026) on: ${topic}. Output a markdown file with sections: ## Description, ## When to Auto-Inject, ## Patterns & Conventions (with specific actionable items), ## Examples (short code snippets if relevant), ## Anti-Patterns (what to avoid). Be specific and practical, not generic. Max 150 lines.`;
-          content = await runClaude(prompt);
-        }
-        await writeFile(skillPath, content, 'utf8');
-        return true;
-      })
-    )
-  );
-  result.skills = skillResults.filter(Boolean).length;
+    // Use pre-written template if available, otherwise fallback
+    const content = tpl.skills[dir] || generateSkillFallback(topic);
+    await writeFile(skillPath, content, 'utf8');
+    skillCount++;
+  }
+  result.skills = skillCount;
 
   // 4. Generate commands
   const commandNames = ['commit', 'review', 'test', 'fix'];

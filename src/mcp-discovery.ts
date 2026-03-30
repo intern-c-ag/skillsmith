@@ -86,8 +86,7 @@ const BUILT_IN_REGISTRY: McpServer[] = [
 // Keywords that trigger each built-in MCP suggestion
 const STACK_MATCHERS: Record<string, (stack: StackInfo) => boolean> = {
   "solana-mcp-server": (s) =>
-    matchesAny(s.frameworks, ["solana", "anchor", "web3"]) ||
-    matchesAny(s.languages, ["rust"]) && matchesAny(s.frameworks, ["solana", "anchor"]),
+    matchesAny(s.frameworks, ["solana", "anchor", "web3"]),
   playwright: (s) =>
     matchesAny(s.testing, ["playwright", "e2e"]) ||
     matchesAny(s.frameworks, ["playwright"]),
