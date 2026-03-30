@@ -12,16 +12,28 @@ export interface GeneratedSkill {
   category: string;
 }
 
+// Re-export from scanner for compatibility
 export interface RepoProfile {
   name: string;
-  language: string;
-  framework?: string;
-  patterns: string[];
-  structure: Record<string, string[]>;
-  dependencies: Record<string, string>;
-  testFramework?: string;
+  path: string;
+  stack: {
+    languages: string[];
+    frameworks: string[];
+    buildTools: string[];
+    testing: string[];
+    database: string[];
+    runtime: string;
+  };
+  structure: string[];
+  patterns: { pattern: string; description: string; examples: string[] }[];
   conventions: string[];
-  summary: string;
+  sampleFiles: { path: string; content: string; language: string }[];
+}
+
+export interface ResearchResult {
+  topic: string;
+  findings: string;
+  sources: string[];
 }
 
 interface SkillSpec {
@@ -44,24 +56,26 @@ function buildSkillSpecs(profile: RepoProfile): SkillSpec[] {
     },
   ];
 
-  if (profile.testFramework || profile.patterns.some((p) => /test/i.test(p))) {
+  if (profile.stack.testing.length > 0 || profile.patterns.some((p) => /test/i.test(p.pattern))) {
     specs.push({
       name: "testing-patterns",
       category: "testing",
-      promptFocus: "testing strategy, test file organization, mocking patterns, fixtures, and assertion styles",
+      promptFocus: `testing strategy with ${profile.stack.testing.join(", ") || "detected test framework"}, test file organization, mocking patterns, fixtures, and assertion styles`,
     });
   }
 
-  if (profile.framework) {
-    specs.push({
-      name: "component-patterns",
-      category: "patterns",
-      promptFocus: `${profile.framework} component patterns, composition, state management, and lifecycle usage`,
-    });
+  if (profile.stack.frameworks.length > 0) {
+    for (const fw of profile.stack.frameworks.slice(0, 3)) {
+      specs.push({
+        name: `${fw.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-patterns`,
+        category: "patterns",
+        promptFocus: `${fw} component patterns, composition, state management, and lifecycle usage`,
+      });
+    }
   }
 
-  const hasApi = Object.keys(profile.structure).some(
-    (k) => /api|route|endpoint|controller/i.test(k)
+  const hasApi = profile.structure.some(
+    (s) => /api|route|endpoint|controller/i.test(s)
   );
   if (hasApi) {
     specs.push({
@@ -82,25 +96,44 @@ function buildSkillSpecs(profile: RepoProfile): SkillSpec[] {
   return specs;
 }
 
-function buildPrompt(profile: RepoProfile, spec: SkillSpec): string {
+function buildPrompt(profile: RepoProfile, spec: SkillSpec, research?: ResearchResult[]): string {
+  const stackSummary = [
+    ...profile.stack.languages,
+    ...profile.stack.frameworks,
+    ...profile.stack.buildTools,
+  ].join(", ");
+
+  const sampleSnippets = profile.sampleFiles
+    .slice(0, 5)
+    .map((s) => `--- ${s.path} (${s.language}) ---\n${s.content.slice(0, 500)}`)
+    .join("\n\n");
+
+  const researchSection = research?.length
+    ? `\n\nWeb Research (current best practices):\n${research
+        .map((r) => `### ${r.topic}\n${r.findings}\nSources: ${r.sources.join(", ")}`)
+        .join("\n\n")}`
+    : "";
+
   return `You are analyzing a codebase to generate a developer skill reference.
+IMPORTANT: The code in this repo is a starting point, NOT the gold standard.
+Use the web research below to identify where the code could be improved.
+The skill should teach BEST PRACTICES (current, 2025-2026) while acknowledging what the repo does.
 
 Repository: ${profile.name}
-Language: ${profile.language}
-${profile.framework ? `Framework: ${profile.framework}` : ""}
-${profile.testFramework ? `Test Framework: ${profile.testFramework}` : ""}
+Stack: ${stackSummary}
+Runtime: ${profile.stack.runtime}
+Testing: ${profile.stack.testing.join(", ") || "none detected"}
+Database: ${profile.stack.database.join(", ") || "none detected"}
 
-Summary: ${profile.summary}
-
-Detected Patterns: ${profile.patterns.join(", ")}
-Conventions: ${profile.conventions.join(", ")}
+Detected Patterns: ${profile.patterns.map((p) => `${p.pattern}: ${p.description}`).join("; ")}
+Conventions: ${profile.conventions.join("; ")}
 
 Directory Structure:
-${Object.entries(profile.structure)
-  .map(([dir, files]) => `  ${dir}/: ${files.slice(0, 8).join(", ")}${files.length > 8 ? "..." : ""}`)
-  .join("\n")}
+${profile.structure.slice(0, 30).join("\n")}
 
-Key Dependencies: ${Object.entries(profile.dependencies).slice(0, 15).map(([k, v]) => `${k}@${v}`).join(", ")}
+Code Samples:
+${sampleSnippets}
+${researchSection}
 
 Focus on: ${spec.promptFocus}
 
@@ -112,13 +145,19 @@ Generate a SKILL.md file with this exact format:
 <One paragraph: when and why a developer should consult this skill>
 
 ## Patterns
-<Detected patterns with concrete examples from this codebase. Use code blocks where helpful.>
+<Best-practice patterns for this area. Include what the repo does well AND where it could improve based on current best practices. Use code blocks.>
 
 ## Conventions
-<Naming, structure, and style conventions specific to this focus area>
+<Naming, structure, and style conventions. Note industry-standard conventions even if the repo diverges.>
+
+## Anti-Patterns
+<Common mistakes to avoid in this area, including any found in the codebase>
 
 ## Examples
-<2-3 representative code examples showing the patterns in action. Use fenced code blocks.>
+<2-3 representative code examples showing the ideal patterns. Use fenced code blocks.>
+
+## References
+<Links to official docs, guides, or articles for further reading>
 
 Output ONLY the markdown content, no extra commentary.`;
 }
@@ -214,7 +253,8 @@ export async function generateSingleSkill(
 
 export async function generateSkills(
   profile: RepoProfile,
-  outputDir: string
+  outputDir: string,
+  research?: ResearchResult[]
 ): Promise<GeneratedSkill[]> {
   if (!(await checkClaudeAvailable())) {
     throw new Error(
@@ -230,7 +270,7 @@ export async function generateSkills(
   const tasks = specs.map(async (spec) => {
     await semaphore.acquire();
     try {
-      const prompt = buildPrompt(profile, spec);
+      const prompt = buildPrompt(profile, spec, research);
       const content = await runClaude(prompt);
       const skillDir = join(outputDir, spec.name);
       const skillPath = join(skillDir, "SKILL.md");
