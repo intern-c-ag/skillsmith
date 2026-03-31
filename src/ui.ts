@@ -61,11 +61,12 @@ export async function confirm(question: string): Promise<boolean> {
 }
 
 export function progressBar(current: number, total: number, width = 30): string {
-  const pct = total > 0 ? current / total : 0;
-  const filled = Math.round(width * pct);
-  const empty = width - filled;
+  const rawPct = total > 0 ? current / total : 0;
+  const pct = Math.max(0, Math.min(1, rawPct));
+  const filled = Math.max(0, Math.min(width, Math.round(width * pct)));
+  const empty = Math.max(0, width - filled);
   const bar = colors.green("█".repeat(filled)) + colors.dim("░".repeat(empty));
-  const pctStr = `${Math.round(pct * 100)}%`.padStart(4);
+  const pctStr = `${Math.round(rawPct * 100)}%`.padStart(4);
   return `${bar} ${pctStr} ${colors.dim(`(${current}/${total})`)}`;
 }
 

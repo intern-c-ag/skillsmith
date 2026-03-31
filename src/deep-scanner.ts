@@ -236,9 +236,8 @@ export async function deepScan(
   const structure: string[] = [];
   const langCounts = new Map<string, number>();
 
-  // Count total files first for progress (after excludes)
-  for await (const f of walkFiles(absRoot, absRoot)) {
-    if (isExcluded(f.relPath, excludePatterns)) continue;
+  // Count total files first for progress
+  for await (const _ of walkFiles(absRoot, absRoot)) {
     stats.total++;
   }
 
