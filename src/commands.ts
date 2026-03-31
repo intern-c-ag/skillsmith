@@ -29,6 +29,12 @@ import { setupProject } from "./setup.js";
 import { isClaudeInstalled, installClaude, launchClaude } from "./claude-manager.js";
 import { colors, spinner, banner, ask, confirm, table, progressBar } from "./ui.js";
 import { getSkillsDir, listSkills, getConfig, setConfig } from "./store.js";
+import {
+  loadScopeConfig,
+  runScopeWizard,
+  scopeToWeights,
+  scopeToExcludePatterns,
+} from "./scope-wizard.js";
 
 interface RunOptions {
   force?: boolean;
@@ -118,6 +124,8 @@ interface TrainOptions {
   forceRetrain?: boolean;
   /** Auto-include reference/ as secondary context (default true) */
   autoReference?: boolean;
+  /** Re-open scope wizard even if config exists */
+  editScope?: boolean;
 }
 
 /**
@@ -164,6 +172,33 @@ export async function train(paths: string[], opts: TrainOptions = {}): Promise<v
       continue;
     }
     const repoName = basename(repoPath);
+
+    // ── Scope wizard ──────────────────────────────────────────────────
+    const existingScope = loadScopeConfig(repoPath);
+    let scopeConfig = existingScope;
+
+    if (opts.editScope) {
+      // --edit-scope: always re-open wizard
+      scopeConfig = await runScopeWizard(repoPath, { editExisting: true });
+    } else if (!existingScope) {
+      // First run: prompt to configure scope
+      scopeConfig = await runScopeWizard(repoPath);
+    }
+
+    // Apply scope to exclude patterns
+    if (scopeConfig) {
+      const weights = scopeToWeights(scopeConfig);
+      const scopeExcludes = scopeToExcludePatterns(weights);
+      // Merge scope excludes with any user-provided --exclude patterns
+      const mergedExcludes = [...(opts.excludePatterns ?? [])];
+      for (const se of scopeExcludes) {
+        if (!mergedExcludes.includes(se)) mergedExcludes.push(se);
+      }
+      opts = { ...opts, excludePatterns: mergedExcludes };
+      if (!existingScope) {
+        console.log(colors.dim(`  scope: excluding ${weights.excludePaths.length} path(s), ${weights.referencePaths.length} reference path(s)`));
+      }
+    }
 
     const contextFingerprint = await computeContextFingerprint(opts.contextFiles ?? []);
     const cached = cacheEnabled ? loadTrainCache(repoPath) : null;

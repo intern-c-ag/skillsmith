@@ -36,6 +36,7 @@ ${colors.bold("Advanced options:")}
   --dry-run            Explain train plan without writing skills
   --force-retrain      Ignore cache and regenerate all train targets
   --no-reference       Skip auto-inclusion of reference/ directory
+  --edit-scope         Re-open scope wizard to reconfigure training scope
   --force              Overwrite all existing files
   --new                Start fresh session (skip resume)
   --no-claude          Skip Claude Code install and launch
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
           dryRun: flags.has("--dry-run"),
           forceRetrain: flags.has("--force-retrain"),
           autoReference: !noReference,
+          editScope: flags.has("--edit-scope"),
         });
         break;
       }
