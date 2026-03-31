@@ -29,7 +29,7 @@ vibe train ~/projects/solana-app ~/projects/api-server
 cd ~/new-project && vibe
 ```
 
-Training is now local-first by default: it scans your code (skips secrets) and generates deterministic skills directly from the deep scanner output — no Claude call required.
+Training is AI-first by default with cache protection: it scans your code (skips secrets), applies context directives, and uses Claude when needed. Cache hits skip unnecessary AI calls.
 
 `vibe train` also uses partial cache reuse by default:
 
@@ -83,6 +83,7 @@ vibe config [key] [val]  Get or set configuration
 ```
 .claude/
 ├── agents/          Specialized sub-agents (research, commits, testing, review)
+│                    + domain agents auto-detected (Solana, Zcash, Circom, mobile)
 ├── skills/          Auto-generated + trained skills for your stack
 ├── commands/        Slash commands (/commit, /review, /test, /fix)
 ├── config/          Project configuration
@@ -90,6 +91,19 @@ vibe config [key] [val]  Get or set configuration
 ```
 
 Everything is generated dynamically based on your actual project — not from a static template.
+
+### Domain Agents
+
+When domain-specific signals are detected in your project stack, additional specialized agents are auto-generated:
+
+| Domain | Agent | Triggered by |
+|--------|-------|-------------|
+| Solana | `solana-security-reviewer` | Anchor, SPL, Solana frameworks |
+| Zcash | `zcash-wallet-specialist` | librustzcash, zebra, sapling/orchard |
+| Circom/ZK | `zk-circom-engineer` | Circom, snarkjs, ZK proof tooling |
+| Mobile Wallet | `mobile-wallet-performance` | React Native/Flutter + crypto signals |
+
+Domain agents are preserved across re-runs unless `--force` is used.
 
 ## Identity Override (`vibe-identity.md`)
 

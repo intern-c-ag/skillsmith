@@ -405,14 +405,30 @@ export async function setupProject(projectDir: string, options: SetupOptions = {
     // templates module not available, fall back to inline generation
   }
 
-  // 2. Generate agents
+  // 2. Generate agents (base 4 + domain-specific)
   const agentNames = ['research-web', 'commit-manager', 'tester', 'reviewer'];
   const agentsDir = join(claudeDir, 'agents');
   await mkdirp(agentsDir);
   for (const name of agentNames) {
-    const content = tpl.agents[name] || generateAgentContent(name, stack);
+    const content = tpl.agents[`${name}.md`] || tpl.agents[name] || generateAgentContent(name, stack);
     await writeFile(join(agentsDir, `${name}.md`), content, 'utf8');
     result.agents++;
+  }
+
+  // Domain-specific agents (Solana, Zcash, Circom, mobile-wallet, etc.)
+  try {
+    const { getDomainAgents } = await import('./domain-agents.js');
+    const domainAgents = getDomainAgents(stack);
+    for (const da of domainAgents) {
+      const agentPath = join(agentsDir, `${da.name}.md`);
+      // Preserve existing custom agents unless force
+      if (!force && existingFiles.has(agentPath)) continue;
+      const content = tpl.agents[`${da.name}.md`] || da.content;
+      await writeFile(agentPath, content, 'utf8');
+      result.agents++;
+    }
+  } catch {
+    // domain-agents module not available; skip
   }
 
   const skillDefs = getSkillsForStack(stack);

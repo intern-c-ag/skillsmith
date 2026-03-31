@@ -4,6 +4,7 @@
  */
 
 import type { StackInfo } from './scanner.js';
+import { getDomainAgents } from './domain-agents.js';
 
 export interface Templates {
   agents: Record<string, string>;
@@ -2026,13 +2027,18 @@ Debug and fix the current issue systematically.
 // ─── MAIN FUNCTION ─────────────────────────────────────────
 
 export function getTemplates(stack: StackInfo): Templates {
-  // Agents — always all 4
+  // Agents — always all 4 base agents
   const agents: Record<string, string> = {
     'research-web.md': agentResearchWeb(stack),
     'commit-manager.md': agentCommitManager(stack),
     'tester.md': agentTester(stack),
     'reviewer.md': agentReviewer(stack),
   };
+
+  // Domain-specific agents (auto-detected from stack signals)
+  for (const da of getDomainAgents(stack)) {
+    agents[`${da.name}.md`] = da.content;
+  }
 
   // Skills — always include core 4
   const skills: Record<string, string> = {
