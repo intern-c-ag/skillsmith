@@ -236,12 +236,15 @@ function buildProjectSummary(ctx: ProjectContext): string {
     }
   }
 
-  // Reference materials (summaries, not full content)
+  // Reference materials — just list paths + first few lines as overview
   if (ctx.references.length > 0) {
-    parts.push(`\n## Reference Materials\n`);
-    for (const ref of ctx.references.slice(0, 10)) {
-      const content = ref.content.slice(0, 1500);
-      parts.push(`### ${ref.path} (${ref.language})\n${content}\n`);
+    parts.push(`\n## Reference Materials (${ctx.references.length} files)\n`);
+    // List all reference paths for awareness
+    parts.push(ctx.references.slice(0, 50).map(r => `- ${r.path} (${r.language}, ${r.lines} lines)`).join("\n"));
+    // Include content of only the most important ones (READMEs)
+    const refReadmes = ctx.references.filter(r => /readme/i.test(r.path));
+    for (const ref of refReadmes.slice(0, 3)) {
+      parts.push(`\n### ${ref.path}\n${ref.content.slice(0, 1000)}\n`);
     }
   }
 
@@ -291,31 +294,28 @@ async function generateSkillsFromContext(
   const { join: joinPath } = await import("node:path");
 
   // Single Claude call: analyze project AND generate all skills at once
-  // Keep context under 30K to avoid Claude CLI timeouts
+  // Keep context under 15K to avoid Claude CLI timeouts
   const prompt = `You are analyzing a software project and generating Claude Code skill files.
 
 PROJECT CONTEXT:
-${projectSummary.slice(0, 30000)}
+${projectSummary.slice(0, 15000)}
 
 ${research?.length ? `\nWeb research on current best practices:\n${research.map(r => `${r.topic}: ${r.findings}`).join("\n\n").slice(0, 10000)}` : ""}
 
-TASK: Generate 4-8 SKILL.md files specific to THIS project "${repoName}". Each skill should cover a different aspect:
-1. Core domain (what this project does, key concepts, domain-specific patterns)
-2. Architecture (how the codebase is organized, module boundaries, data flow)
-3. Coding conventions (naming, style, idioms specific to this project)
-4. Security considerations for this domain
-5. Testing patterns (if applicable)
-6. Framework-specific patterns (if applicable)
+TASK: Generate exactly 4 SKILL.md files specific to THIS project "${repoName}":
+1. Core domain — what this project does, key concepts
+2. Architecture — codebase organization, data flow
+3. Coding conventions — naming, idioms, patterns
+4. Security — domain-specific security concerns
 
-OUTPUT FORMAT: Return a JSON array where each object has:
-- "name": kebab-case skill name (e.g. "zcash-privacy-patterns")
-- "category": one of "domain", "architecture", "conventions", "security", "testing", "patterns"
-- "description": one-line description
-- "content": the FULL SKILL.md markdown content (100-200 lines)
+OUTPUT FORMAT: Return a JSON array of 4 objects:
+- "name": kebab-case (e.g. "zcash-privacy-patterns")
+- "category": "domain" | "architecture" | "conventions" | "security"
+- "description": one-line
+- "content": SKILL.md markdown (50-80 lines max)
 
-Each skill's content must have sections: ## Description, ## Patterns (with code examples referencing actual files), ## Conventions, ## Anti-Patterns, ## Key Concepts, ## References
-
-Be SPECIFIC to this project. Reference actual file paths, actual patterns, actual code. Not generic.
+Content sections: ## Description, ## Patterns, ## Conventions, ## Anti-Patterns
+Be SPECIFIC to this project. Reference actual file paths.
 Return ONLY the JSON array. No markdown fences.`;
 
   let skills: Array<{ name: string; category: string; description: string; content: string }>;
