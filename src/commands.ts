@@ -92,10 +92,14 @@ export async function init(projectDir: string, opts: RunOptions = {}): Promise<v
   await run(projectDir, { ...opts, noClaude: true });
 }
 
+interface TrainOptions {
+  contextFiles?: string[];
+}
+
 /**
  * Train: deep-learn from repos
  */
-export async function train(paths: string[]): Promise<void> {
+export async function train(paths: string[], opts: TrainOptions = {}): Promise<void> {
   banner();
   const skillsDir = getSkillsDir();
   const allGenerated: GeneratedSkill[] = [];
@@ -151,10 +155,25 @@ export async function train(paths: string[]): Promise<void> {
       mcpSpin.fail("MCP discovery failed (continuing)");
     }
 
-    // 4. Generate skills from deep context
-    //    Build a comprehensive project summary for Claude
+    // 4. Load extra context files
+    let extraContext = "";
+    if (opts.contextFiles?.length) {
+      const { readFile } = await import("node:fs/promises");
+      for (const cf of opts.contextFiles) {
+        try {
+          const content = await readFile(cf, "utf-8");
+          const name = cf.split("/").pop() || cf;
+          extraContext += `\n\n## Extra Context: ${name}\n${content.slice(0, 10000)}\n`;
+          console.log(colors.dim(`  + Loaded context: ${name} (${content.length} chars)`));
+        } catch {
+          console.log(colors.dim(`  ⚠ Could not read: ${cf}`));
+        }
+      }
+    }
+
+    // 5. Generate skills from deep context
     const genSpin = spinner(`Generating skills for ${repoName}...`);
-    const projectSummary = buildProjectSummary(context);
+    const projectSummary = buildProjectSummary(context) + extraContext;
     const generated = await generateSkillsFromContext(projectSummary, context.stack, skillsDir, repoName, research);
     genSpin.succeed(`Generated ${generated.length} skill(s)`);
 
@@ -301,17 +320,37 @@ Return ONLY the JSON array. No markdown fences.`;
 
   let skills: Array<{ name: string; category: string; description: string; content: string }>;
   try {
-    const { execFile } = await import("node:child_process");
+    const { spawn } = await import("node:child_process");
     const output = await new Promise<string>((resolve, reject) => {
-      execFile(
-        "claude",
-        ["-p", prompt, "--output-format", "text"],
-        { encoding: "utf-8", timeout: 300000, maxBuffer: 50 * 1024 * 1024 },
-        (err, stdout) => {
-          if (err) return reject(err);
-          resolve(stdout);
+      const child = spawn("claude", ["-p", prompt, "--output-format", "text"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let lastLine = "";
+      const timeout = setTimeout(() => { child.kill(); reject(new Error("Timeout")); }, 300000);
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stdout += text;
+        // Show live preview of what Claude is generating
+        const lines = text.split("\n").filter((l: string) => l.trim());
+        if (lines.length > 0) {
+          lastLine = lines[lines.length - 1].trim().slice(0, 80);
+          process.stdout.write(`\r\x1b[K  ${colors.dim("⟩")} ${colors.dim(lastLine)}`);
         }
-      );
+      });
+
+      child.stderr.on("data", () => {}); // ignore stderr
+
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        process.stdout.write(`\r\x1b[K`); // clear the preview line
+        if (code !== 0) return reject(new Error(`claude exited with code ${code}`));
+        resolve(stdout);
+      });
+
+      child.on("error", (err) => { clearTimeout(timeout); reject(err); });
     });
     const match = output.match(/\[[\s\S]*\]/);
     skills = match ? JSON.parse(match[0]) : [];

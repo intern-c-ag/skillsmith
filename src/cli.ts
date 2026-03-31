@@ -26,7 +26,7 @@ ${colors.bold("Options:")}
   --force              Overwrite all existing files
   --new                Start fresh session (skip resume)
   --no-claude          Skip Claude Code install and launch
-  --no-update-check    Skip update check
+  --context <file>     Add extra context (markdown, session exports)
   -h, --help           Show this help
   -v, --version        Show version
 
@@ -34,8 +34,11 @@ ${colors.bold("Examples:")}
   ${colors.dim("# Set up and start vibing")}
   vibe
 
-  ${colors.dim("# Train on your repos first")}
+  ${colors.dim("# Train on your repos")}
   vibe train ~/projects/my-solana-app ~/projects/api
+
+  ${colors.dim("# Train with extra context (e.g. Opencode session export)")}
+  vibe train . --context ~/session-export.md --context ~/design-doc.md
 
   ${colors.dim("# Then start a new project with your skills")}
   cd ~/new-project && vibe
@@ -80,7 +83,15 @@ async function main(): Promise<void> {
           console.error(`  ${colors.dim("vibe train ~/my-project")}`);
           process.exit(1);
         }
-        await train(paths.map(p => resolve(p)));
+        // Collect --context files
+        const contextFiles: string[] = [];
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] === "--context" && args[i + 1]) {
+            contextFiles.push(resolve(args[i + 1]));
+            i++; // skip next
+          }
+        }
+        await train(paths.map(p => resolve(p)), { contextFiles });
         break;
       }
       case "init": {
