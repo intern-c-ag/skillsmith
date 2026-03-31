@@ -5,8 +5,10 @@ import { execSync } from "node:child_process";
 export interface ProjectContext {
   name: string;
   path: string;
-  /** What this project IS — derived from README, docs, package description */
+  /** What this project IS — derived from vibe-identity.md, README, docs, package description */
   identity: string;
+  /** Where the identity came from: "vibe-identity.md" | "context-files" | "readme-inference" | "fallback" */
+  identitySource: string;
   /** Full directory tree */
   structure: string[];
   /** All source files with content */
@@ -314,13 +316,14 @@ export async function deepScan(
   // Detect stack from manifests
   const stack = detectStackFromManifests(manifests, langCounts, absRoot);
 
-  // Build identity from README + package description
-  const identity = buildIdentity(name, docs, manifests);
+  // Resolve identity with precedence: vibe-identity.md > context files > README inference > fallback
+  const { identity, identitySource } = await resolveIdentity(name, absRoot, docs, manifests);
 
   return {
     name,
     path: absRoot,
     identity,
+    identitySource,
     structure,
     sourceFiles,
     docs,
@@ -333,19 +336,50 @@ export async function deepScan(
   };
 }
 
-function buildIdentity(name: string, docs: FileEntry[], manifests: FileEntry[]): string {
+/**
+ * Resolve project identity with strict precedence:
+ *   1. vibe-identity.md (highest — user-pinned identity, never overridden)
+ *   2. Context files with explicit identity statements
+ *   3. README / docs / manifest inference
+ *   4. Fallback to project name
+ */
+async function resolveIdentity(
+  name: string,
+  rootDir: string,
+  docs: FileEntry[],
+  manifests: FileEntry[],
+): Promise<{ identity: string; identitySource: string }> {
+  // 1. vibe-identity.md — highest precedence
+  try {
+    const vibeId = await readFile(join(rootDir, "vibe-identity.md"), "utf-8");
+    if (vibeId.trim()) {
+      return { identity: vibeId.trim(), identitySource: "vibe-identity.md" };
+    }
+  } catch {
+    // File doesn't exist — continue down the chain
+  }
+
+  // 2. Context files with explicit identity (e.g. .vibe/identity, IDENTITY.md)
+  const contextPaths = ["IDENTITY.md", ".vibe/identity.md", ".vibe/identity"];
+  for (const cp of contextPaths) {
+    try {
+      const content = await readFile(join(rootDir, cp), "utf-8");
+      if (content.trim()) {
+        return { identity: content.trim(), identitySource: `context-file:${cp}` };
+      }
+    } catch {
+      // Not found — continue
+    }
+  }
+
+  // 3. README + manifest inference (original logic)
   const parts: string[] = [];
 
-  // From README
-  const readme = docs.find(d =>
-    /^readme/i.test(basename(d.path))
-  );
+  const readme = docs.find(d => /^readme/i.test(basename(d.path)));
   if (readme) {
-    // Take first ~2000 chars of README
     parts.push(readme.content.slice(0, 2000));
   }
 
-  // From package.json description
   const pkg = manifests.find(m => basename(m.path) === "package.json");
   if (pkg) {
     try {
@@ -354,14 +388,18 @@ function buildIdentity(name: string, docs: FileEntry[], manifests: FileEntry[]):
     } catch {}
   }
 
-  // From Cargo.toml description
   const cargo = manifests.find(m => basename(m.path).toLowerCase() === "cargo.toml");
   if (cargo) {
     const descMatch = cargo.content.match(/description\s*=\s*"([^"]+)"/);
     if (descMatch) parts.push(`Crate description: ${descMatch[1]}`);
   }
 
-  return parts.join("\n\n") || `Project: ${name}`;
+  if (parts.length) {
+    return { identity: parts.join("\n\n"), identitySource: "readme-inference" };
+  }
+
+  // 4. Fallback
+  return { identity: `Project: ${name}`, identitySource: "fallback" };
 }
 
 function detectStackFromManifests(

@@ -91,6 +91,30 @@ vibe config [key] [val]  Get or set configuration
 
 Everything is generated dynamically based on your actual project — not from a static template.
 
+## Identity Override (`vibe-identity.md`)
+
+If your project's inferred identity drifts (e.g., vibe says "multi-chain" when you mean "Solana + Zcash only"), create a `vibe-identity.md` at the repo root. It takes **highest precedence** over README and manifest inference.
+
+**Precedence order:**
+1. `vibe-identity.md` (pinned identity — never overridden)
+2. Context files (`IDENTITY.md`, `.vibe/identity.md`)
+3. README / manifest inference
+4. Fallback (project name)
+
+**Example `vibe-identity.md`:**
+
+```markdown
+# MyWallet
+
+A privacy-focused Solana + Zcash wallet for mobile.
+
+- Chains: Solana, Zcash — no others.
+- Target: iOS and Android via React Native.
+- Tone: security-first, minimalist.
+```
+
+The log output will show `identity source: vibe-identity.md` so you can verify which source was used.
+
 ## Requirements
 
 - Node.js >= 18

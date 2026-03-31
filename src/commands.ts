@@ -203,6 +203,7 @@ export async function train(paths: string[], opts: TrainOptions = {}): Promise<v
     process.stdout.write(`\r\x1b[K`);
 
     console.log(colors.green(`  ✔ ${context.totalScanned} files read, ${context.totalSkipped} skipped`));
+    console.log(colors.dim(`  identity source: ${context.identitySource}`));
 
     let extraContext = "";
     if (opts.contextFiles?.length) {
@@ -371,7 +372,7 @@ export async function train(paths: string[], opts: TrainOptions = {}): Promise<v
 function buildProjectSummary(ctx: ProjectContext): string {
   const parts: string[] = [];
 
-  // Identity
+  // Identity (source: ctx.identitySource)
   parts.push(`# Project: ${ctx.name}\n\n${ctx.identity}`);
 
   // Structure overview
