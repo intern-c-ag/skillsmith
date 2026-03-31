@@ -199,10 +199,10 @@ async function interactiveSelect(
         const e = entries[i];
         const tag = result[i];
         const prefix = i === cursor ? colors.cyan("❯") : " ";
-        const icon = e.isDir ? "📁" : "📄";
+        const kind = e.isDir ? "[DIR]" : "[FILE]";
         const tagStr = TAG_COLORS[tag](`[${tag}]`);
         const name = i === cursor ? colors.bold(e.name) : e.name;
-        console.log(`  ${prefix} ${icon} ${name.padEnd(30)} ${tagStr}`);
+        console.log(`  ${prefix} ${kind} ${name.padEnd(30)} ${tagStr}`);
       }
     };
 
