@@ -1,6 +1,6 @@
 # vibe
 
-One command to set up Claude Code with skills, agents, and MCPs — learned from how you actually code.
+One command to set up your coding agent (Claude Code or Opencode) with skills, agents, and MCPs — learned from how you actually code.
 
 ## Install
 
@@ -76,14 +76,32 @@ vibe list                List trained skills
 vibe config [key] [val]  Get or set configuration
 ```
 
+### Provider selection
+
+On first interactive run, vibe asks which coding agent to use:
+
+```
+Set up for Claude Code or Opencode? [1/2]:
+```
+
+The choice is remembered per-project in `.vibe/provider.json` (with a global fallback in `~/.config/vibe/provider.json`). Override non-interactively:
+
+```bash
+vibe --provider claude     # use Claude Code
+vibe --provider opencode   # use Opencode
+```
+
+If no selection exists and stdin is not a TTY, Claude Code is used by default.
+
 ### Flags
 
 ```
+--provider <name>    Select provider: claude | opencode
 --context <file>     Add extra context file (repeatable)
 --force-retrain      Ignore cache and force skill regeneration (train only)
 --force              Overwrite existing files
 --new                Fresh session (skip resume)
---no-claude          Skip Claude Code install/launch
+--no-claude          Skip coding agent install/launch
 ```
 
 ## What gets generated

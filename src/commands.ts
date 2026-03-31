@@ -35,11 +35,20 @@ import {
   scopeToWeights,
   scopeToExcludePatterns,
 } from "./scope-wizard.js";
+import {
+  type Provider,
+  resolveProvider,
+  saveProjectProvider,
+  isInteractive,
+  isValidProvider,
+} from "./provider.js";
 
 interface RunOptions {
   force?: boolean;
   newSession?: boolean;
   noClaude?: boolean;
+  /** CLI --provider flag value (unvalidated). */
+  provider?: string;
 }
 
 /**
@@ -47,6 +56,9 @@ interface RunOptions {
  */
 export async function run(projectDir: string, opts: RunOptions = {}): Promise<void> {
   banner();
+
+  // 0. Resolve provider — prompt once if interactive and no prior choice
+  const provider = await pickProvider(projectDir, opts.provider);
 
   // 1. Setup project
   const setupSpin = spinner("Setting up project...");
@@ -86,8 +98,75 @@ export async function run(projectDir: string, opts: RunOptions = {}): Promise<vo
     mcpSpin.fail("MCP discovery failed (continuing)");
   }
 
-  // 4. Install Claude Code if needed
+  // 4. Install & launch the selected provider
   if (!opts.noClaude) {
+    await installAndLaunch(provider, projectDir, opts);
+  } else {
+    const cmd = provider === "opencode" ? "opencode" : "claude";
+    console.log(`\n${colors.green("✔")} Project set up. Run ${colors.cyan(cmd)} to start.`);
+  }
+}
+
+/**
+ * Prompt the user (once) for provider choice if not already determined.
+ * Saves the selection per-project.
+ */
+async function pickProvider(projectDir: string, flagOverride?: string): Promise<Provider> {
+  // If flag provided or already saved, resolveProvider handles it
+  const resolved = resolveProvider(projectDir, flagOverride);
+
+  // If there was a flag or a saved choice, just use it
+  if (flagOverride || resolved !== "claude" || !isInteractive()) {
+    // resolved is authoritative when flag is set or a local/global config exists
+    // For non-interactive with no saved config, default is "claude"
+    return resolved;
+  }
+
+  // Check if there's an explicit saved choice (not just the fallback default)
+  const hasLocalChoice = (() => {
+    try {
+      const { readFileSync } = require("node:fs");
+      const data = JSON.parse(readFileSync(join(projectDir, ".vibe", "provider.json"), "utf-8"));
+      return isValidProvider(data.provider);
+    } catch { return false; }
+  })();
+
+  if (hasLocalChoice) return resolved;
+
+  // Interactive prompt — ask once
+  console.log(`\n${colors.bold("Provider selection:")}`);
+  console.log(`  ${colors.cyan("[1]")} Claude Code`);
+  console.log(`  ${colors.cyan("[2]")} Opencode\n`);
+
+  const answer = await ask("Set up for Claude Code or Opencode? [1/2]: ");
+  const choice: Provider = answer.trim() === "2" || answer.trim().toLowerCase() === "opencode"
+    ? "opencode"
+    : "claude";
+
+  saveProjectProvider(projectDir, choice);
+  console.log(colors.dim(`  Saved provider "${choice}" → .vibe/provider.json\n`));
+  return choice;
+}
+
+/**
+ * Install (if needed) and launch the selected provider.
+ */
+async function installAndLaunch(provider: Provider, projectDir: string, opts: RunOptions): Promise<void> {
+  if (provider === "opencode") {
+    // Check for opencode binary
+    const { commandExists } = await import("./claude-manager.js");
+    if (!commandExists("opencode")) {
+      console.log(colors.yellow("\n⚠ opencode is not installed."));
+      console.log(colors.dim("  Install: https://opencode.ai or npm i -g opencode"));
+      return;
+    }
+    console.log(`\n${colors.green("✔")} Ready. Launching Opencode...\n`);
+    const { spawn } = await import("node:child_process");
+    const child = spawn("opencode", [], { cwd: projectDir, stdio: "inherit" });
+    child.on("error", (err) => { console.error(`Failed to launch opencode: ${err.message}`); process.exit(1); });
+    child.on("exit", (code) => { process.exit(code ?? 0); });
+  } else {
+    // Claude Code (existing behaviour)
     if (!isClaudeInstalled()) {
       const installSpin = spinner("Installing Claude Code...");
       const installResult = await installClaude();
@@ -99,12 +178,8 @@ export async function run(projectDir: string, opts: RunOptions = {}): Promise<vo
         return;
       }
     }
-
-    // 5. Launch
     console.log(`\n${colors.green("✔")} Ready. Launching Claude Code...\n`);
     launchClaude(projectDir, { newSession: opts.newSession });
-  } else {
-    console.log(`\n${colors.green("✔")} Project set up. Run ${colors.cyan("claude")} to start.`);
   }
 }
 
@@ -112,7 +187,7 @@ export async function run(projectDir: string, opts: RunOptions = {}): Promise<vo
  * Init: setup without launching
  */
 export async function init(projectDir: string, opts: RunOptions = {}): Promise<void> {
-  banner();
+  // Don't re-print banner — run() does it
   await run(projectDir, { ...opts, noClaude: true });
 }
 

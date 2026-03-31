@@ -8,6 +8,15 @@ const flags = new Set(args.filter(a => a.startsWith("-")));
 const positional = args.filter(a => !a.startsWith("-"));
 const command = positional[0];
 
+/** Extract value for a --key <value> flag pair. */
+function flagValue(name: string): string | undefined {
+  const idx = args.indexOf(name);
+  if (idx !== -1 && args[idx + 1] && !args[idx + 1].startsWith("-")) {
+    return args[idx + 1];
+  }
+  return undefined;
+}
+
 function printHelp(): void {
   banner();
   console.log(`
@@ -20,10 +29,10 @@ ${colors.bold("Usage:")} vibe train .
 ${colors.bold("Quick start:")}
   ${colors.dim("cd ~/my-project")}
   ${colors.dim("vibe train .")}
-  ${colors.dim("vibe")}            ${colors.dim("# set up project + launch Claude Code")}
+  ${colors.dim("vibe")}            ${colors.dim("# set up project + launch coding agent")}
 
 ${colors.bold("Other commands:")}
-  ${colors.cyan("(default)")}              Set up project + launch Claude Code
+  ${colors.cyan("(default)")}              Set up project + launch coding agent
   ${colors.cyan("init")}                   Set up project without launching
   ${colors.cyan("mcp")}                    Discover and install MCP servers
   ${colors.cyan("push")} [repo]            Push skill library to GitHub
@@ -31,6 +40,14 @@ ${colors.bold("Other commands:")}
   ${colors.cyan("config")} [key] [val]     Get or set configuration
   ${colors.cyan("protect deps")}           Add supply-chain protection to detected package managers
   ${colors.cyan("scope-rules")} [dir]      Edit nested scope rules for a repo
+
+${colors.bold("Provider selection:")}
+  --provider claude      Use Claude Code (default)
+  --provider opencode    Use Opencode
+
+  On first interactive run vibe will ask which provider to use.
+  The choice is saved per-project in ${colors.dim(".vibe/provider.json")} with a
+  global fallback in ${colors.dim("~/.config/vibe/provider.json")}.
 
 ${colors.bold("Advanced options:")}
   --context <file>     Add extra context (markdown, session exports)
@@ -41,7 +58,7 @@ ${colors.bold("Advanced options:")}
   --edit-scope         Re-open scope wizard to reconfigure training scope
   --force              Overwrite all existing files
   --new                Start fresh session (skip resume)
-  --no-claude          Skip Claude Code install and launch
+  --no-claude          Skip coding agent install and launch
   -h, --help           Show this help
   -v, --version        Show version
 `);
@@ -61,10 +78,13 @@ async function main(): Promise<void> {
   // Dynamic imports to keep startup fast
   const { run, train, init, mcp, push, list, config } = await import("./commands.js");
 
+  const providerFlag = flagValue("--provider");
+
   const opts = {
     force: flags.has("--force"),
     newSession: flags.has("--new"),
     noClaude: flags.has("--no-claude"),
+    provider: providerFlag,
   };
 
   try {
@@ -92,6 +112,10 @@ async function main(): Promise<void> {
           if (a === "--exclude" && args[i + 1]) {
             excludePatterns.push(args[i + 1]);
             i++;
+            continue;
+          }
+          if (a === "--provider" && args[i + 1]) {
+            i++; // skip the value — already parsed above
             continue;
           }
           if (a.startsWith("-")) continue;
