@@ -9,7 +9,7 @@ import { researchStack } from "./research.js";
 import { discoverMcps, installMcp, type McpServer } from "./mcp-discovery.js";
 import { setupProject } from "./setup.js";
 import { isClaudeInstalled, installClaude, launchClaude } from "./claude-manager.js";
-import { colors, spinner, banner, ask, confirm, table } from "./ui.js";
+import { colors, spinner, banner, ask, confirm, table, progressBar } from "./ui.js";
 import { getSkillsDir, listSkills, getConfig, setConfig } from "./store.js";
 
 interface RunOptions {
@@ -108,12 +108,12 @@ export async function train(paths: string[]): Promise<void> {
     // 1. Deep scan — reads every file, shows progress
     console.log(colors.bold(`\n📂 Scanning ${repoName}...\n`));
     const context = await deepScan(repoPath, (file, stats) => {
-      const pct = stats.total > 0 ? Math.round((stats.scanned + stats.skipped) / stats.total * 100) : 0;
-      const line = `  ${colors.dim(`[${pct}%]`)} ${colors.cyan("reading")} ${file}`;
-      // Overwrite current line
+      const done = stats.scanned + stats.skipped;
+      const bar = progressBar(done, stats.total);
+      const truncFile = file.length > 50 ? "..." + file.slice(-47) : file;
+      const line = `  ${bar}  ${colors.cyan(truncFile)}`;
       process.stdout.write(`\r\x1b[K${line.slice(0, process.stdout.columns || 120)}`);
     });
-    // Clear the progress line
     process.stdout.write(`\r\x1b[K`);
 
     console.log(colors.green(`  ✔ ${context.totalScanned} files read, ${context.totalSkipped} skipped`));

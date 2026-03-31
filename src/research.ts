@@ -61,28 +61,41 @@ function getResearchTopics(stack: StackInfo): string[] {
   return [...topics].filter(Boolean);
 }
 
-async function researchTopic(topic: string, repoName: string, sem: Semaphore): Promise<ResearchResult | null> {
-  await sem.acquire();
-  try {
-    const prompt = `Search the web for current best practices for ${topic} development in 2025-2026. This is for a project called "${repoName}". Focus on: recommended patterns, project structure, common pitfalls, performance tips, latest version features. Format your response as a concise markdown summary. Include URLs to sources you found.`;
-    const output = await claudeResearch(prompt);
-    return {
-      topic,
-      findings: output,
-      sources: extractUrls(output),
-    };
-  } catch {
-    return null;
-  } finally {
-    sem.release();
-  }
-}
-
 export async function researchStack(stack: StackInfo, repoName: string): Promise<ResearchResult[]> {
   const topics = getResearchTopics(stack);
   if (topics.length === 0) return [];
 
-  const sem = new Semaphore(2);
-  const results = await Promise.all(topics.map((t) => researchTopic(t, repoName, sem)));
-  return results.filter((r): r is ResearchResult => r !== null);
+  // Single batched call for ALL topics
+  const topicList = topics.join(", ");
+  const prompt = `Search the web for current best practices (2025-2026) for these technologies: ${topicList}. This is for a project called "${repoName}".
+
+For EACH technology, provide a brief summary of:
+- Recommended patterns and project structure
+- Common pitfalls to avoid
+- Latest features/changes
+- Include source URLs
+
+Return as a JSON array where each object has:
+- "topic": the technology name
+- "findings": markdown summary (2-4 paragraphs max)
+- "sources": array of URLs
+
+Return ONLY the JSON array, no markdown fences.`;
+
+  try {
+    const output = await claudeResearch(prompt, 90000);
+    const match = output.match(/\[[\s\S]*\]/);
+    if (match) {
+      const parsed = JSON.parse(match[0]) as ResearchResult[];
+      return parsed.filter(r => r.topic && r.findings);
+    }
+    // Fallback: treat entire output as one result
+    return [{
+      topic: topicList,
+      findings: output,
+      sources: extractUrls(output),
+    }];
+  } catch {
+    return [];
+  }
 }

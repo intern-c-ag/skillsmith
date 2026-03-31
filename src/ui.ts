@@ -60,6 +60,15 @@ export async function confirm(question: string): Promise<boolean> {
   return /^y(es)?$/i.test(answer);
 }
 
+export function progressBar(current: number, total: number, width = 30): string {
+  const pct = total > 0 ? current / total : 0;
+  const filled = Math.round(width * pct);
+  const empty = width - filled;
+  const bar = colors.green("█".repeat(filled)) + colors.dim("░".repeat(empty));
+  const pctStr = `${Math.round(pct * 100)}%`.padStart(4);
+  return `${bar} ${pctStr} ${colors.dim(`(${current}/${total})`)}`;
+}
+
 export function table(rows: string[][]) {
   if (!rows.length) return;
   const cols = rows[0].length;
